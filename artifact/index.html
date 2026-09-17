@@ -1,0 +1,510 @@
+<!doctype html>
+<title>Fly Reflex</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0d13;
+    --panel: #12161f;
+    --panel-2: #171c27;
+    --line: rgba(255,255,255,0.08);
+    --ink: #e9edf6;
+    --muted: #8891a3;
+    --faint: #545e70;
+    --danger: #ff4d6d;
+    --danger-dim: #6b2836;
+    --dopamine: #2ee6b8;
+    --dopamine-dim: #1b5449;
+    --amber: #ffb648;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+  }
+
+  body {
+    padding-inline: clamp(14px, 3vw, 32px);
+    padding-block: calc(env(safe-area-inset-top, 0px) + 18px) calc(env(safe-area-inset-bottom, 0px) + 24px);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  h1, h2, h3 { font-family: 'Rajdhani', 'IBM Plex Sans', sans-serif; margin: 0; text-wrap: balance; }
+
+  .mono { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+  a { color: var(--dopamine); }
+
+  /* ---------- header ---------- */
+
+  .masthead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .wordmark { font-size: clamp(1.4rem, 2.6vw, 1.9rem); font-weight: 700; letter-spacing: 0.01em; }
+  .wordmark span { color: var(--danger); }
+  .tagline { color: var(--muted); font-size: 0.85rem; margin-top: 2px; }
+
+  /* ---------- HUD bar ---------- */
+
+  .hud {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .hud-cell {
+    background: var(--panel);
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .hud-label {
+    font-size: 0.68rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  .hud-value {
+    font-size: clamp(1.15rem, 2.4vw, 1.55rem);
+    font-weight: 600;
+  }
+
+  #judgment { transition: color 120ms ease; }
+  #judgment.j-good { color: var(--dopamine); }
+  #judgment.j-bad { color: var(--danger); }
+
+  .mood-track {
+    position: relative;
+    height: 8px;
+    border-radius: 5px;
+    margin-top: 4px;
+    background: linear-gradient(90deg, var(--danger-dim), var(--panel-2) 50%, var(--dopamine-dim));
+    overflow: visible;
+  }
+  .mood-marker {
+    position: absolute;
+    top: 50%;
+    width: 3px;
+    height: 16px;
+    background: var(--ink);
+    border-radius: 2px;
+    transform: translate(-50%, -50%);
+    transition: left 100ms linear;
+  }
+
+  /* ---------- stage ---------- */
+
+  .stage {
+    display: grid;
+    grid-template-columns: minmax(220px, 340px) 1fr;
+    gap: 14px;
+  }
+
+  @media (max-width: 720px) {
+    .stage { grid-template-columns: 1fr; }
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .panel-title {
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  /* ---------- strumline ---------- */
+
+  .lanes {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+
+  .lane {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .lane-icon {
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 12px;
+    background: var(--panel-2);
+    border: 2px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: border-color 90ms ease, background 90ms ease, box-shadow 90ms ease;
+  }
+
+  .lane-icon svg { width: 52%; height: 52%; }
+  .lane-icon path { fill: var(--faint); transition: fill 90ms ease; }
+
+  .lane.approaching .lane-icon { border-color: var(--amber); }
+  .lane.pressed .lane-icon {
+    background: var(--dopamine-dim);
+    border-color: var(--dopamine);
+    box-shadow: 0 0 22px -4px var(--dopamine);
+  }
+  .lane.pressed .lane-icon path { fill: var(--dopamine); }
+  .lane.approaching .lane-icon path { fill: var(--amber); }
+
+  .lane-name {
+    font-size: 0.66rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  .lane-rate {
+    width: 100%;
+    height: 4px;
+    border-radius: 3px;
+    background: var(--panel-2);
+    overflow: hidden;
+  }
+  .lane-rate > i {
+    display: block;
+    height: 100%;
+    width: 0%;
+    background: var(--danger);
+    transition: width 90ms linear;
+  }
+
+  .legend {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 0.78rem;
+    color: var(--muted);
+    margin-top: auto;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+  }
+  .legend-row { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+  /* ---------- raster ---------- */
+
+  .raster-wrap { position: relative; }
+  #raster {
+    width: 100%;
+    height: 280px;
+    display: block;
+    border-radius: 8px;
+    background: #060810;
+  }
+  .raster-axis {
+    position: absolute;
+    left: 10px;
+    font-size: 0.62rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--faint);
+    pointer-events: none;
+  }
+  .raster-axis.top { top: 8px; }
+  .raster-axis.bottom { bottom: 8px; }
+
+  /* ---------- transport ---------- */
+
+  .transport {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 16px;
+    flex-wrap: wrap;
+  }
+
+  button.transport-btn {
+    font: inherit;
+    font-family: 'IBM Plex Mono', monospace;
+    background: var(--panel-2);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    padding: 7px 14px;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  button.transport-btn:hover { border-color: var(--dopamine); }
+  button.transport-btn:focus-visible, input:focus-visible { outline: 2px solid var(--dopamine); outline-offset: 2px; }
+
+  input[type="range"] { flex: 1; min-width: 120px; accent-color: var(--dopamine); }
+
+  .transport-time { font-size: 0.8rem; color: var(--muted); min-width: 5.5em; }
+
+  /* ---------- facts strip ---------- */
+
+  .facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .fact {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 0.78rem;
+    color: var(--muted);
+    display: flex;
+    gap: 6px;
+  }
+  .fact b { color: var(--ink); font-weight: 600; }
+
+  .credit { font-size: 0.75rem; color: var(--faint); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .lane-icon, .lane-rate > i, #judgment { transition: none; }
+  }
+</style>
+
+<header class="masthead">
+  <div>
+    <h1 class="wordmark">FLY<span>REFLEX</span></h1>
+    <p class="tagline">668 real FlyWire neurons vs. a Friday Night Funkin&rsquo; chart &mdash; replayed, not live</p>
+  </div>
+</header>
+
+<section class="hud" aria-label="Match stats">
+  <div class="hud-cell">
+    <span class="hud-label">Score</span>
+    <span class="hud-value mono" id="score">0</span>
+  </div>
+  <div class="hud-cell">
+    <span class="hud-label">Combo</span>
+    <span class="hud-value mono" id="combo">0</span>
+  </div>
+  <div class="hud-cell">
+    <span class="hud-label">Judgment</span>
+    <span class="hud-value" id="judgment">&mdash;</span>
+  </div>
+  <div class="hud-cell">
+    <span class="hud-label">Mood (dopamine &harr; pain)</span>
+    <div class="mood-track"><div class="mood-marker" id="moodMarker" style="left:50%"></div></div>
+  </div>
+</section>
+
+<section class="stage">
+  <div class="panel">
+    <span class="panel-title">Strumline &middot; player lanes</span>
+    <div class="lanes" id="lanes"></div>
+    <div class="legend">
+      <div class="legend-row"><span class="dot" style="background:var(--amber)"></span> note approaching (looming input rising)</div>
+      <div class="legend-row"><span class="dot" style="background:var(--dopamine)"></span> descending neurons fired &rarr; key pressed</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <span class="panel-title">Connectome activity &middot; live raster</span>
+    <div class="raster-wrap">
+      <canvas id="raster" width="900" height="280"></canvas>
+      <span class="raster-axis top">LPLC2 / LC4 &mdash; looming input</span>
+      <span class="raster-axis bottom">DNg11 / DNp09 / DNa01&hellip; &mdash; descending output</span>
+    </div>
+  </div>
+</section>
+
+<div class="transport">
+  <button class="transport-btn" id="playBtn" type="button">Pause</button>
+  <button class="transport-btn" id="restartBtn" type="button">Restart</button>
+  <input type="range" id="scrub" min="0" value="0" step="1" aria-label="Scrub through replay">
+  <span class="transport-time mono" id="timeLabel">0.0s / 0.0s</span>
+</div>
+
+<section class="facts" aria-label="Dataset facts">
+  <span class="fact"><b id="factNeurons">668</b> real neurons</span>
+  <span class="fact"><b>18,968</b> real synapses</span>
+  <span class="fact">FlyWire dataset <b>v783</b></span>
+  <span class="fact"><b>314</b> looming-input / <b>24</b> descending-output neurons used</span>
+  <span class="fact">circuit data via <a href="https://github.com/DenisSergeevitch/desktop-fly" target="_blank" rel="noopener">desktop-fly</a>, CC BY-NC 4.0</span>
+</section>
+
+<p class="credit">Offline replay of a synthetic chart run through the real leaky-integrate-and-fire simulation (<span class="mono">fly_brain.py</span>) &mdash; no live game connected. Reasoning: only one pooled input/output population exists in the data, so 4 independent copies of the same real weights run in parallel, one per lane; whichever fires hardest gets the keypress.</p>
+
+<script>
+(() => {
+  const LANES = ["left", "down", "up", "right"];
+  // single chevron shape, pointing right at rotation 0, rotated per direction
+  function arrowSVG(dir) {
+    const rot = { right: 0, down: 90, up: -90, left: 180 }[dir];
+    return `<svg viewBox="0 0 100 100"><path transform="rotate(${rot} 50 50)" d="M30 15 L75 50 L30 85 L30 62 L18 62 L18 38 L30 38 Z"/></svg>`;
+  }
+
+  const lanesEl = document.getElementById("lanes");
+  LANES.forEach(name => {
+    const lane = document.createElement("div");
+    lane.className = "lane";
+    lane.id = `lane-${name}`;
+    lane.innerHTML = `
+      <div class="lane-icon">${arrowSVG(name)}</div>
+      <div class="lane-rate"><i></i></div>
+      <span class="lane-name">${name}</span>`;
+    lanesEl.appendChild(lane);
+  });
+
+  const canvas = document.getElementById("raster");
+  const ctx = canvas.getContext("2d");
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function fitCanvas() {
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = Math.round(rect.width * dpr);
+    canvas.height = Math.round(rect.height * dpr);
+  }
+
+  const scoreEl = document.getElementById("score");
+  const comboEl = document.getElementById("combo");
+  const judgmentEl = document.getElementById("judgment");
+  const moodMarker = document.getElementById("moodMarker");
+  const playBtn = document.getElementById("playBtn");
+  const restartBtn = document.getElementById("restartBtn");
+  const scrub = document.getElementById("scrub");
+  const timeLabel = document.getElementById("timeLabel");
+
+  let data = null;
+  let idx = 0;
+  let playing = true;
+  let acc = 0;
+  let lastTs = null;
+  const HISTORY = 90; // frames of raster history shown at once
+
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function drawRaster() {
+    fitCanvas();
+    const w = canvas.width, h = canvas.height;
+    ctx.fillStyle = "#060810";
+    ctx.fillRect(0, 0, w, h);
+
+    const nRows = data.raster_kind.length;
+    const rowH = h / nRows;
+    const start = Math.max(0, idx - HISTORY);
+    const colW = w / HISTORY;
+
+    for (let i = 0; i < HISTORY; i++) {
+      const fi = start + i;
+      if (fi > idx || fi < 0 || fi >= data.frames.length) continue;
+      const frame = data.frames[fi];
+      const x = w - (idx - fi) * colW;
+      for (let r = 0; r < nRows; r++) {
+        if (!frame.raster[r]) continue;
+        ctx.fillStyle = data.raster_kind[r] === "input" ? "#2ee6b8" : "#ff4d6d";
+        ctx.fillRect(x, r * rowH, Math.max(1.4 * dpr, colW * 0.9), Math.max(1, rowH * 0.85));
+      }
+    }
+    // divider between input/output rows
+    const nInput = data.raster_kind.filter(k => k === "input").length;
+    ctx.strokeStyle = "rgba(255,255,255,0.15)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, nInput * rowH);
+    ctx.lineTo(w, nInput * rowH);
+    ctx.stroke();
+  }
+
+  function judgmentClass(name) {
+    if (["Sick", "Good"].includes(name)) return "j-good";
+    if (["Bad", "Shit", "Miss"].includes(name)) return "j-bad";
+    return "";
+  }
+
+  function render() {
+    const frame = data.frames[idx];
+    scoreEl.textContent = frame.score;
+    comboEl.textContent = frame.combo + "x";
+    judgmentEl.textContent = frame.judgment || "—";
+    judgmentEl.className = judgmentClass(frame.judgment);
+    moodMarker.style.left = `${(frame.mood + 1) / 2 * 100}%`;
+
+    LANES.forEach((name, i) => {
+      const laneEl = document.getElementById(`lane-${name}`);
+      laneEl.classList.toggle("pressed", frame.pressed === name);
+      laneEl.classList.toggle("approaching", !!frame.active_lanes && frame.active_lanes.includes(name) && frame.pressed !== name);
+      laneEl.querySelector(".lane-rate > i").style.width = `${Math.min(100, frame.lane_rates[i] * 100 * 6)}%`;
+    });
+
+    const total = data.frames.length / data.steps_per_second;
+    timeLabel.textContent = `${frame.t.toFixed(1)}s / ${total.toFixed(1)}s`;
+    scrub.value = idx;
+    drawRaster();
+  }
+
+  function step(ts) {
+    if (lastTs === null) lastTs = ts;
+    const dt = (ts - lastTs) / 1000;
+    lastTs = ts;
+    if (playing) {
+      acc += dt;
+      const frameDur = 1 / data.steps_per_second;
+      while (acc >= frameDur && idx < data.frames.length - 1) {
+        acc -= frameDur;
+        idx++;
+      }
+      if (idx >= data.frames.length - 1) playing = false, playBtn.textContent = "Replay";
+      render();
+    }
+    requestAnimationFrame(step);
+  }
+
+  playBtn.addEventListener("click", () => {
+    if (idx >= data.frames.length - 1) idx = 0;
+    playing = !playing;
+    playBtn.textContent = playing ? "Pause" : "Play";
+    lastTs = null;
+  });
+  restartBtn.addEventListener("click", () => {
+    idx = 0; acc = 0; playing = true; playBtn.textContent = "Pause"; lastTs = null; render();
+  });
+  scrub.addEventListener("input", () => {
+    idx = Number(scrub.value); playing = false; playBtn.textContent = "Play"; render();
+  });
+
+  fetch("song_recording.json").then(r => r.json()).then(json => {
+    data = json;
+    scrub.max = data.frames.length - 1;
+    document.getElementById("factNeurons").textContent = data.n_neurons_total;
+    if (reduceMotion) { playing = false; playBtn.textContent = "Play"; }
+    render();
+    requestAnimationFrame(step);
+  });
+
+  window.addEventListener("resize", () => { if (data) drawRaster(); });
+})();
+</script>
