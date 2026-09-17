@@ -16,12 +16,14 @@ que o jogo real de verdade tem (palco animado, anúncio piscando ao lado).
 
 `--rate` existe porque no jogo real o painel mostrou SIM RATE entre 360 e 700
 Hz, não os 1000 Hz de projeto — a máquina não dá conta do sim + captura +
-overlay + Firefox ao mesmo tempo. E TODA a temporização dela é por passo
-calibrada a 1 kHz (`FALL_STEPS` em ms, `alpha = (1/SIM_HZ)/RATE_TAU`,
-`MOOD_DECAY`), então rodar a 600 Hz estica cada constante em 1,67x sem ninguém
-avisar. A bancada em tempo simulado NUNCA vê isso: ela entrega sempre 1000
-passos por segundo simulado. Era esse o buraco entre "20/20 Sick aqui" e "8%
-de acerto no jogo".
+overlay + Firefox ao mesmo tempo. Toda a temporização dela ERA por passo,
+calibrada a 1 kHz, então rodar a 600 Hz esticava cada constante em 1,67x sem
+ninguém avisar — e o pior: o próprio cérebro avançava 1 ms fixo por chamada,
+ou seja, ela vivia 0,6 s de tempo-de-mosca por segundo do mundo, em câmera
+lenta. Isso foi consertado (17/09): o `tick()` mede o intervalo real e o passa
+pro `step()`, e a taxa é lida por segundo real. Rodar `--rate 600` agora tem
+que dar o MESMO resultado que 1000 — se divergir, voltou a existir constante
+por passo em algum lugar.
 
 ATENÇÃO: ela NÃO aprende entre os níveis. Os pesos vêm do conectoma e são
 fixos; o humor decai de volta a zero. Isso aqui mede a recruta, não treina —
@@ -71,9 +73,9 @@ def play(speed, amp, noise, notes=NOTES_PER_LEVEL, seed=7, rate_hz=None):
     step_dt = 1.0 / (rate_hz or run.SIM_HZ)
     for i in range(int(seconds / step_dt)):
         t = i * step_dt
-        drive, hit = run.demo_signals(t * speed)
+        px, hit_px = run.demo_pixels(t * speed)
         if amp != 1.0:
-            drive = {k: v * amp for k, v in drive.items()}
+            px = {k: v * amp for k, v in px.items()}
         if noise:
             if t >= next_shimmer:
                 # em segundos, não em passos: o palco pisca no tempo do mundo,
@@ -82,9 +84,14 @@ def play(speed, amp, noise, notes=NOTES_PER_LEVEL, seed=7, rate_hz=None):
                 next_shimmer = t + SHIMMER_HOLD_S
                 # abs: o capture lê |frame - fundo|, uma magnitude que nunca
                 # é negativa — ruído centrado em zero seria fácil demais
-                shimmer = {k: noise * run.DRIVE_SCALE * abs(rng.normal())
+                shimmer = {k: noise * run.NOTE_PIXELS * abs(rng.normal())
                            for k in run.ZERO_LANES}
-            drive = {k: v + shimmer[k] for k, v in drive.items()}
+            # soma em PIXEL, antes do piso: a câmera vê nota e anúncio como uma
+            # variação só. Somar depois do piso deixaria o ruído entrar inteiro
+            # e a bancada mediria uma mosca que não existe mais.
+            px = {k: v + shimmer[k] for k, v in px.items()}
+        drive = {k: run.pixels_to_drive(v) for k, v in px.items()}
+        hit = {k: run.pixels_to_drive(v) for k, v in hit_px.items()}
         _, evs = sim.tick(t, drive, hit)
         events.extend(evs)
     return sim, events

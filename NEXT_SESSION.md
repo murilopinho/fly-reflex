@@ -230,3 +230,151 @@ pelo portal já ajudou).
 - O KBHGames roda **vários anúncios em vídeo em sequência** antes do jogo
   carregar, e um interstitial estático pode ocupar o player inteiro por mais de
   um minuto. Gravação de teste virou quase toda anúncio duas vezes.
+
+---
+
+## Sessão 6 (17/09) — o ponto de operação estava em convulsão
+
+Ponto de partida: relato de fora ("é o número de spikes, ela nem está jogando,
+está tendo um AVC") + os 8% do jogo real. O relato estava certo, e a causa era
+outra do que parecia.
+
+### O que foi medido antes de mexer em nada
+
+Ferramenta nova: **`vitals.py`** — `python3 vitals.py`. O `tune.py` mede se ela
+ACERTA; este mede se ela está SAUDÁVEL, por população de neurônio, contra a
+faixa da mosca real. Foi ele que achou tudo abaixo.
+
+Com `DRIVE_SCALE = 0,192` (o valor que estava no jogo) e uma nota na pista:
+
+| população | n | Hz médio | pico | acima de 100 Hz |
+|---|---|---|---|---|
+| LPLC2 | 210 | **172,2** | 183 | **210 de 210** |
+| LC4 | 104 | **188,9** | 192 | **104 de 104** |
+| DNp01 (fibra gigante) | 2 | **0,0** | 0 | 0 |
+
+A camada visual inteira no teto do refratário, com 10 Hz de diferença entre o
+mais quieto e o mais agitado — 314 neurônios em uníssono, sem carregar
+informação nenhuma. E o neurônio de fuga em ZERO. Repouso, esse, estava
+saudável (0,7 Hz): o problema só existia sob estímulo.
+
+Varredura de ganho (pico visual medido pelo `tick()` real, durante uma nota de
+verdade, não em estímulo constante):
+
+| DRIVE_SCALE | pico visual | separação do repouso na saída |
+|---|---|---|
+| 0,060 | 53 Hz | 2,4x |
+| **0,090 ← escolhido** | **76 Hz** | **3,8x** |
+| 0,120 | 99 Hz | 4,5x |
+| 0,192 (antigo) | 150 Hz | 6,2x |
+
+76 Hz é o que um LPLC2 real alcança em looming. Acima disso é convulsão; abaixo
+sobra pouco chão pro portão de ruído.
+
+### O gatilho do pânico: o humor fabricava notas
+
+O achado que explica "ela tirou um Good e só então saiu martelando", com número.
+O humor baixava o LIMIAR da camada descendente (`MOOD_GAIN` em cima de
+`thresh`). Taxa da saída **em repouso, sem estímulo nenhum**, por humor:
+
+| humor | saída em repouso |
+|---|---|
+| 0,0 | 0,8 Hz |
+| +0,4 | 2,7 Hz |
+| +0,6 | **4,3 Hz** |
+| +1,0 | **7,8 Hz** |
+
+Um Sick vale **+0,55**. Ou seja: uma nota bem acertada punha as pistas em 4 Hz
+de puro nada — acima do portão de armar. Ela literalmente alucinava nota depois
+de acertar. Pior: a recompensa ia para os QUATRO cérebros (a hipótese nº 1 da
+sessão 5, perguntada duas vezes sem resposta), então um acerto numa pista
+alucinava nas outras três. Os ghosts da bancada caíam justamente em pistas onde
+o chart nunca mandou nota — foi isso que entregou o bug.
+
+Dois consertos:
+1. **Recompensa só na pista que ganhou** (`run.py`, laço de eventos).
+2. **Humor multiplica o que ela VÊ, não o limiar** (`fly_brain.py`): mood +1 faz
+   a nota chegar 1,35x mais forte, mood -1 faz 0,65x — dentro da faixa 0,7-1,3x
+   que a regra de crista aguenta. Pista vazia continua vazia por melhor que ela
+   esteja. É também o mecanismo honesto: dopamina na mosca modula ganho de
+   sinapse, não despolariza o neurônio descendente até ele disparar sozinho.
+   Ghosts do nível limpo: **19 → 0**.
+
+### A câmera lenta: o cérebro não vivia em tempo real
+
+O buraco que a sessão 5 abriu e não fechou. Não eram só as constantes de
+suavização: `FlyBrain.step()` avançava **1 ms fixo por chamada**. Com o sim
+entregando 361-670 Hz no jogo real, ela vivia 0,4-0,7 s de tempo-de-mosca por
+segundo do mundo — reagindo a nota que já passou.
+
+Consertado de ponta a ponta, tudo em segundos reais:
+- `tick()` mede o intervalo (`dt`) e passa pro `step(dt)`;
+- `alpha = dt / RATE_TAU` (era `(1/SIM_HZ)/RATE_TAU`);
+- `FALL_STEPS = 15` passos virou `FALL_S = 0,015` s;
+- `MOOD_DECAY = 0.998` por passo virou `MOOD_TAU = 0,5` s;
+- a taxa instantânea é `/dt`, não `* SIM_HZ` — esse detalhe sozinho inflava
+  toda leitura em 1,67x a 600 Hz e rendia 26 tapas no vazio num chart limpo;
+- o ruído escala por `sqrt(DT/dt)`, senão a rede fica mais agitada só porque a
+  máquina engasgou.
+
+Resultado — **a escada dá o mesmo a 1000 e a 600 Hz**, o que nunca tinha
+acontecido:
+
+| nível | 1000 Hz | 600 Hz | 400 Hz |
+|---|---|---|---|
+| 1 aquecimento | 20 Sick, 0 gh, +17 ms | 19 Sick, 1 gh, +20 ms | 20 Sick, 6 gh, +21 ms |
+| 2 normal | 20 Sick, 2 gh, +15 ms | 20 Sick, 2 gh, +20 ms | 19 Sick, 0 gh, +11 ms |
+| 3 rapido | 20 Sick, 0 gh, +20 ms | 20 Sick, 0 gh, +19 ms | 20 Sick, 5 gh, +22 ms |
+| 4 nota fraca | 19 Sick, 0 gh, +17 ms | 19 Sick, 0 gh, +21 ms | 20 Sick, 2 gh, +23 ms |
+
+(na sessão 5 o atraso DOBRAVA de 1000 pra 600 e os ghosts iam de 0 a 10)
+
+`tune.py --selfcheck`: 6/6 Sick em 0,7x / 1,0x / 1,3x, **0 ghost**, drift de
+tempo de **3 ms** na faixa toda.
+
+### Piso de contraste — entrou, mas não faz o que se esperava
+
+`CONTRAST_FLOOR = 8` px (de 255) em `pixels_to_drive()`, o funil único pelo qual
+o drive do cérebro E o sinal do juiz passam. Abaixo de 8 px de variação média, o
+drive é ZERO absoluto. Antes, 3,2 px (1,3% do recorte) já armava a pista — daí
+qualquer anúncio piscando ler como nota nas quatro pistas.
+
+Duas lições medidas aqui:
+- **Portão, não subtração.** Subtrair o piso e reescalar come a amplitude da
+  nota fraca (0,7x = 15,4 px; o piso de 8 deletava metade) e ela voltou a errar
+  toda nota fraca — exatamente a dependência de amplitude que a regra de crista
+  existe pra matar.
+- **O piso não resolve o nível 5, e não tem como resolver.** O ruído do nível 5
+  vale 35% de uma nota e a nota fraca vale 70%: eles se sobrepõem em amplitude.
+  Medido: piso 11 px já custa 18 das 20 notas do nível 4, e o nível 5 só cai de
+  144 pra 102 ghosts. **8 é o teto.**
+
+Também tentado e **revertido**: exigir que a pista esteja acordada por ≥60 ms
+antes de aceitar a crista (nota mantém a pista acima do portão por ~123 ms,
+piscada de 30 ms não). Melhora pouco o nível 5 (139 → 106) e custa 8 notas do
+nível 4. Não paga. Fica registrado pra ninguém tentar de novo.
+
+### O que continua em pé, e o que fazer a seguir
+
+1. **O nível 5 (palco vivo) continua falhando: 141-172 ghosts, 0 Miss.** Atenção
+   ao comparar com os 94 da sessão 5: **não é o mesmo teste**. O ruído dele
+   agora nasce em PIXEL e passa pelo mesmo funil da câmera (antes era injetado
+   em unidade de drive, o que isentava a bancada inteira do piso de contraste —
+   a bancada continuaria descrevendo uma mosca que não existe mais).
+2. **Separar nota de piscada exige o dado que falta: um frame real do jogo.**
+   Amplitude não separa (provado acima) e tempo não separa (provado acima). O
+   candidato é ESPAÇO: a nota é um blob localizado que desce a pista, a piscada
+   é mudança espalhada pelo recorte. O `delta` por linha já é calculado em
+   `CaptureWorker.run` — o discriminador seria exigir pico localizado no perfil
+   de linhas em vez de mudança uniforme. **Mas isso não se calibra às cegas**,
+   mesma situação do sustain.
+3. **Calibração de pistas, consertada mas NÃO testada contra o jogo:** ela agora
+   insiste a cada 2 s até achar a strumline, em vez de aceitar o fallback pra
+   sempre. Antes calibrava no PRIMEIRO frame — que no KBHGames é anúncio —,
+   falhava, caía nas coordenadas do modo kiosk (que o `start.sh` não usa mais) e
+   nunca tentava de novo, porque o retry de 10 s exige as pistas mudas e o
+   anúncio piscando mantinha `drive > 0.01` pra sempre. A faixa de busca também
+   deixou de ser pixels fixos do kiosk e passou a ser 10%-70% da altura do
+   frame. **Suspeito nº 1 dos 8%, e só rodando o jogo se confirma.**
+4. **Ela continua sem aprender.** Pesos fixos, humor decai a zero. Nada mudou
+   nisso e nada foi aprovado.

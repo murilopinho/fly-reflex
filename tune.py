@@ -22,11 +22,11 @@ from judge import HIT_WINDOW_S
 from overlay import LANE_NAMES
 
 TIERS = ["Sick", "Good", "Bad", "Shit", "Miss", "Ghost"]
-CURRENT_TAU, CURRENT_FALL = run.RATE_TAU, run.FALL_STEPS
+CURRENT_TAU, CURRENT_FALL = run.RATE_TAU, run.FALL_S
 SECONDS = 24.0          # 26 notes at the demo chart's 0.9 s period
 
 
-def measure(rate_tau=None, fall_steps=None, seconds=SECONDS, amp=1.0):
+def measure(rate_tau=None, fall_s=None, seconds=SECONDS, amp=1.0):
     """Run the real tick() in simulated time; return the judged events.
 
     `amp` scales the looming drive only — the judge still sees the note at
@@ -35,24 +35,26 @@ def measure(rate_tau=None, fall_steps=None, seconds=SECONDS, amp=1.0):
     circuit, without changing when the note is actually due. A press rule that
     only works at amp=1.0 is a rule tuned to this chart, not to the game.
     """
-    saved = run.FALL_STEPS          # module globals are read inside tick(); putting
-    if fall_steps is not None:      # them back keeps one sweep from poisoning the next
-        run.FALL_STEPS = fall_steps # (it silently did, and the amplitude block lied)
+    saved = run.FALL_S, run.RATE_TAU  # module globals are read inside tick(); putting
+    if fall_s is not None:            # them back keeps one sweep from poisoning the next
+        run.FALL_S = fall_s           # (it silently did, and the amplitude block lied)
     shared = {"drive": dict(run.ZERO_LANES), "hit": dict(run.ZERO_LANES), "status": "tune"}
     sim = run.SimWorker(shared, demo=True, dry_run=True)   # dry_run: never touches ydotool
     if rate_tau is not None:
-        sim.alpha = (1.0 / run.SIM_HZ) / rate_tau
+        run.RATE_TAU = rate_tau       # tick() reads it per step now, not sim.alpha once
 
     events = []
     dt = 1.0 / run.SIM_HZ
     for i in range(int(seconds * run.SIM_HZ)):
         t = i * dt
-        drive, hit = run.demo_signals(t)
+        px, hit_px = run.demo_pixels(t)
         if amp != 1.0:
-            drive = {k: v * amp for k, v in drive.items()}
+            px = {k: v * amp for k, v in px.items()}
+        drive = {k: run.pixels_to_drive(v) for k, v in px.items()}
+        hit = {k: run.pixels_to_drive(v) for k, v in hit_px.items()}
         _, evs = sim.tick(t, drive, hit)
         events.extend(evs)
-    run.FALL_STEPS = saved
+    run.FALL_S, run.RATE_TAU = saved
     return sim, events
 
 
@@ -81,19 +83,19 @@ def sweep():
 
     print("-- RATE_TAU (how much the rate is smoothed before the crest shows) --")
     for tau in (0.04, 0.08, 0.12, 0.16, 0.20):
-        counts, md = measure_and_sum(tau, run.FALL_STEPS)
+        counts, md = measure_and_sum(tau, run.FALL_S)
         mark = "  <- current" if tau == CURRENT_TAU else ""
         print(line(f"RATE_TAU {tau:.2f}", counts, md) + mark)
 
-    print("\n-- FALL_STEPS (ms of falling rate before it counts as a crest) --")
-    for fs in (5, 10, 15, 20, 30):
+    print("\n-- FALL_S (ms of falling rate before it counts as a crest) --")
+    for fs in (0.005, 0.010, 0.015, 0.020, 0.030):
         counts, md = measure_and_sum(run.RATE_TAU, fs)
         mark = "  <- current" if fs == CURRENT_FALL else ""
-        print(line(f"FALL_STEPS {fs}", counts, md) + mark)
+        print(line(f"FALL_S {fs*1000:.0f}ms", counts, md) + mark)
 
     print("\n-- signal strength: the test a fixed threshold could not pass --")
     for amp in (0.7, 0.85, 1.0, 1.15, 1.3):
-        counts, md = measure_and_sum(run.RATE_TAU, run.FALL_STEPS, amp=amp)
+        counts, md = measure_and_sum(run.RATE_TAU, run.FALL_S, amp=amp)
         print(line(f"drive x{amp:.2f}", counts, md))
 
 

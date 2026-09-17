@@ -30,8 +30,22 @@ BASELINE = 0.036     # tonic drive; rests neurons at BASELINE*TAU ≈ 0.73, just
 NOISE = 0.030        # per-step current jitter — what makes the resting brain flicker.
                      # Swept: 0.02 leaves the network dead silent, 0.05+ drowns the
                      # signal. 0.03 gives ~0.7 Hz at rest vs ~17 Hz driven (25x contrast).
-MOOD_DECAY = 0.998   # per-step decay toward neutral mood (at 1 kHz)
-MOOD_GAIN = 0.15     # how much mood shifts the output layer's firing threshold
+MOOD_TAU = 0.5       # seconds for mood to decay toward neutral. Was 0.998 PER STEP,
+                     # which is 0.5 s only while the sim really holds 1 kHz — at the
+                     # 600 Hz the machine actually manages, the same constant made
+                     # mood last 1.67x longer than anyone intended.
+MOOD_GAIN = 0.35     # how much mood scales what she sees: mood +1 makes a note
+                     # land 1.35x harder, mood -1 makes it land 0.65x — inside
+                     # the 0.7-1.3x swing the crest rule is known to tolerate.
+                     # It used to shift the OUTPUT LAYER'S THRESHOLD instead,
+                     # and that let mood manufacture notes out of nothing:
+                     # measured resting output rate by mood was 0.8 Hz at
+                     # neutral, 4.3 Hz at +0.6, 7.8 Hz at +1.0 — past the
+                     # arming gate with no stimulus at all. One Sick is +0.55,
+                     # so a single good hit had her tapping empty lanes. Gain
+                     # is also the honest mechanism: dopamine in the fly
+                     # modulates synaptic gain, it does not tonically
+                     # depolarize descending neurons into firing at ghosts.
 
 # Looming drive added on top of baseline when a note is bearing down on a lane.
 # Calibrated by sweep (see calibrate() below): under ~0.05 nothing reaches the
@@ -86,34 +100,49 @@ class FlyBrain:
         self.total_spikes = 0
 
     def stimulate_input(self, intensity):
-        """Looming drive onto LPLC2/LC4. Scalar, or an array over input_idx."""
+        """Looming drive onto LPLC2/LC4, scaled by mood. Scalar, or an array
+        over input_idx. Mood multiplies here and nowhere else, so a blank lane
+        stays blank however good she feels."""
         self.ext_input[:] = 0.0
-        self.ext_input[self.input_idx] = intensity
+        self.ext_input[self.input_idx] = intensity * (1.0 + MOOD_GAIN * self.mood)
 
     def apply_judgment(self, r):
         """r>0 dopamine (Good/Sick), r<0 pain (Miss/Shit/Bad)."""
         self.mood = float(np.clip(self.mood + r, -1.0, 1.0))
 
-    def step(self):
+    def step(self, dt_s=DT / 1000.0):
+        """Advance the network by `dt_s` seconds of REAL time.
+
+        It used to advance a fixed 1 ms per call no matter how long the call
+        actually took. With the sim managing 361-670 Hz next to the game, that
+        meant the fly lived 0.6 s of brain time per second of world time — in
+        slow motion, reacting to a note that had already gone past. Every
+        timing constant in the project was tuned against a fly that only exists
+        when the machine is idle. dt << TAU (20.4 ms) either way, so the Euler
+        step stays stable at any rate the machine manages.
+        """
         # Only a handful of neurons spike per step, so summing those rows beats
         # a full 668x668 matmul by ~30x — that is what buys us real-time 1 kHz.
+        dt_ms = max(0.2, min(50.0, dt_s * 1000.0))
         fired = np.flatnonzero(self.spikes)
         syn_input = self.W[fired].sum(axis=0) if fired.size else 0.0
-        noise = self.rng.normal(0.0, NOISE, self.n).astype(np.float32)
+        # sqrt(DT/dt): fewer, bigger steps must not mean a noisier brain. The
+        # jitter is a random walk on v, so its variance per unit TIME is what
+        # has to stay put — scaling the std this way keeps resting activity at
+        # the ~0.7 Hz the NOISE sweep calibrated, at any step size.
+        noise = self.rng.normal(
+            0.0, NOISE * np.sqrt(DT / dt_ms), self.n).astype(np.float32)
         i_total = BASELINE + self.ext_input + syn_input + noise
 
-        thresh = np.full(self.n, V_THRESH, dtype=np.float32)
-        thresh[self.output_idx] -= MOOD_GAIN * self.mood  # confident when mood>0, hesitant when <0
-
-        self.v += (DT / TAU) * (-self.v + i_total * TAU)
+        self.v += (dt_ms / TAU) * (-self.v + i_total * TAU)
 
         free = self.refractory <= 0.0
-        self.spikes = free & (self.v > thresh)
+        self.spikes = free & (self.v > V_THRESH)
         self.v[self.spikes] = V_RESET
         self.refractory[self.spikes] = REFRACTORY_MS
-        self.refractory = np.maximum(0.0, self.refractory - DT)
+        self.refractory = np.maximum(0.0, self.refractory - dt_ms)
 
-        self.mood *= MOOD_DECAY
+        self.mood *= float(np.exp(-dt_ms / 1000.0 / MOOD_TAU))
         self.total_spikes += int(self.spikes.sum())
         return self.spikes
 

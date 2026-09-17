@@ -50,7 +50,7 @@ def _bright_runs(row):
     return [(s, e) for s, e in zip(starts, ends) if _ARROW_MIN_W <= e - s <= _ARROW_MAX_W]
 
 
-def autocalibrate(img, search_rows=range(150, 460, 4)):
+def autocalibrate(img, search_rows=None):
     """Locate the player's four lanes in a full screenshot.
 
     Returns (lanes_dict, info_string), or (None, reason) if the strumline
@@ -59,6 +59,15 @@ def autocalibrate(img, search_rows=range(150, 460, 4)):
     gray = np.asarray(img.convert("L"), dtype=np.float32)
     if gray.shape[0] < 500:
         return None, "screenshot too small"
+
+    if search_rows is None:
+        # Was a hard range(150, 460) — rows measured with Firefox in kiosk
+        # mode. start.sh dropped kiosk (it hid the overlay), so the browser's
+        # tab and URL bars now push the whole game down and out of that band.
+        # Scale the search to the frame instead of trusting pixel numbers from
+        # a window layout that no longer exists.
+        h = gray.shape[0]
+        search_rows = range(int(h * 0.10), int(h * 0.70), 4)
 
     best_row, best_runs = None, []
     for y in search_rows:

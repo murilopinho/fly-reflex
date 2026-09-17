@@ -39,6 +39,8 @@ A janela é arrastável; `Esc` fecha.
 | `pipewire_capture.py` | captura via portal Wayland (rápida, silenciosa) |
 | `screen_capture.py` | captura via Spectacle (plano B, não precisa de permissão) |
 | `tune.py` | bancada de calibração: roda o `tick()` real em tempo simulado e mede |
+| `vitals.py` | exame de saúde: taxa de disparo por população vs. faixa da mosca real |
+| `train.py` | campo de treino: escada de 5 níveis, `--rate` simula a máquina engasgando |
 | `simulate_song.py` | gera `song_recording.json` para a visualização web em `artifact/` |
 
 Visualização web publicada (replay offline, compartilhável):
@@ -46,17 +48,51 @@ https://claude.ai/artifact/7Z41L9DWEzT3soaXXrSYdx
 
 ## Decisões importantes (não refazer do zero)
 
-**Dados.** Repo `desktop-fly` (CC BY-NC 4.0) clonado em `desktop-fly/`.
+**Dados.** Repo `desktop-fly` (CC BY-NC 4.0) clonado em `desktop-fly/` —
+`git clone https://github.com/DenisSergeevitch/desktop-fly.git` no commit
+`32b0001`. Ele tem `.git` próprio, então neste repo entra como gitlink: o
+commit fica fixado, mas os arquivos não estão versionados aqui. Se a pasta
+sumir, re-clonar.
 `data/circuit.json` = 668 neurônios reais, 18.968 sinapses reais, com posição
 3D e lado (esquerdo/direito) de cada um. `data/brain_points.json` = 23.210
 coordenadas de soma do cérebro inteiro (é o que desenha a silhueta real do
 cérebro na overlay). Não precisa de token do neuPrint.
 
 **Parâmetros da simulação** seguem o ponto de operação documentado pelo projeto
-original (`desktop-fly/CLAUDE.md`): passo de 1 ms, tau 20,4 ms, limiar 1,0,
-0,0008 de corrente por sinapse, refratário de 2 ms, e um `BASELINE` que deixa
-os neurônios logo abaixo do limiar. Esse ponto é fino de propósito — não
-escalar o baseline linearmente, ou populações inteiras emudecem.
+original (`desktop-fly/CLAUDE.md`): tau 20,4 ms, limiar 1,0, 0,0008 de corrente
+por sinapse, refratário de 2 ms, e um `BASELINE` que deixa os neurônios logo
+abaixo do limiar. Esse ponto é fino de propósito — não escalar o baseline
+linearmente, ou populações inteiras emudecem.
+
+**O passo NÃO é mais fixo em 1 ms (17/09).** `step(dt_s)` integra o intervalo
+real que o `tick()` mediu, e o ruído escala por `sqrt(DT/dt)` pra manter a
+difusão por unidade de tempo constante — sem isso a rede fica mais agitada só
+porque a máquina ficou lenta. Antes ela avançava 1 ms fixo por chamada: a
+361-670 Hz que a máquina entrega de verdade, isso significava viver 0,4-0,7 s
+de tempo-de-mosca por segundo do mundo, **em câmera lenta**, reagindo a nota
+que já passou. Conferido: o repouso dá 0,68-0,72 Hz a 1000, 600 e 400 Hz, e a
+escada do `train.py` dá o mesmo resultado nas três taxas. Se `--rate 600`
+divergir de `--rate 1000`, é porque voltou a existir constante por passo em
+algum lugar.
+
+**Ponto de operação do estímulo: `DRIVE_SCALE = 0,09`** (era `0,192`). O
+`vitals.py` mostrou o que 0,192 fazia: os 314 neurônios visuais (LPLC2 + LC4)
+TODOS entre 172 e 189 Hz, com 10 Hz de diferença entre o mais quieto e o mais
+agitado — a camada inteira no teto do refratário, sem carregar informação. Não
+era cérebro de mosca, era convulsão (o diagnóstico de fora, "ela está tendo um
+AVC", estava certo). Em 0,09 o pico durante uma nota de verdade é 76 Hz, dentro
+do que um LPLC2 real alcança sob looming, e a separação do repouso na camada
+descendente continua 3,8x. 0,05 seria mais calmo ainda, mas deixa só 2,4x —
+pouco chão pro portão pisar.
+
+**A fibra gigante `DNp01` nunca vai disparar com este dado, e isso não é bug.**
+Os dois DNp01 do subgrafo recebem entrada LÍQUIDA NEGATIVA (-457 e -433 em
+sinapses assinadas; 1,7x mais inibição que excitação, e até o que vem direto de
+LPLC2/LC4 soma -387). Medido: 0,0 Hz sob nota, em qualquer ganho e com estímulo
+em pedaço do olho ou na retina inteira. Quem carrega o sinal de aperto são os
+outros DNs de entrada positiva — `DNp04` (+686, +825), `DNa02` (+982, +985),
+`DNp02`, `DNp11`, `DNg11`. O `output_idx` já usa os 24 DNs juntos, então isso
+está honesto; só não conte história de "a fibra gigante dela dispara".
 
 **Ruído** (`NOISE = 0.03`) foi varrido: 0,02 deixa o cérebro morto e 0,05+
 afoga o sinal. Em 0,03 dá ~0,7 Hz em repouso contra ~17 Hz sob estímulo
@@ -114,12 +150,18 @@ se move quando o sinal fica mais alto. Resultado medido: **26/26 Sick com o
 drive variando de 0,70× a 1,30×**, delta +17 a +24 ms, 0 miss.
 
 Três constantes sustentam isso, e nenhuma é crítica no tempo (é essa a graça):
-`ARM_HZ = 5` é só um portão de ruído (repouso ~0,7 Hz, nota ~19 Hz);
-`FALL_STEPS = 15` é quanto tempo de queda conta como crista; `REARM_RISE = 1.3`
-é o quanto a taxa precisa subir de volta pra valer como nota nova — sem ele a
-cauda decaindo da mesma nota disparava de novo a cada cooldown (26 notas
-viravam 36 apertos, o excedente tudo Ghost). `RATE_TAU` subiu de 0,08 para
-**0,20**: a regra lê a *forma* da curva, então curva lisa crista limpa.
+`ARM_HZ = 3` é só um portão de ruído (medido: repouso da saída bate no máximo
+1,7 Hz em 20 s de silêncio, nota faz 5,9 Hz); `FALL_S = 0,015` é quanto tempo
+de queda conta como crista; `REARM_RISE = 1.3` é o quanto a taxa precisa subir
+de volta pra valer como nota nova — sem ele a cauda decaindo da mesma nota
+disparava de novo a cada cooldown (26 notas viravam 36 apertos, o excedente
+tudo Ghost). `RATE_TAU` subiu de 0,08 para **0,20**: a regra lê a *forma* da
+curva, então curva lisa crista limpa.
+
+`ARM_HZ` era 5 e `FALL_STEPS` era 15 *passos*. O 5 pertencia ao cérebro
+saturado (lá a nota fazia 10,6 Hz); com o ganho corrigido ele ficou ACIMA da
+nota e ela parou de apertar. Varrido: `RATE_TAU 0,20` + `FALL_S 15 ms` é o
+ótimo — 0,30 já custa 18 das 20 notas do nível de nota fraca.
 
 **⚠️ Nota de SEGURAR (sustain) fica pior com essa regra.** Como a barra mantém
 o sinal no alto, a crista só acontece quando ela **acaba**: medido, uma barra

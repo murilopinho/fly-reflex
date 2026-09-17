@@ -28,8 +28,13 @@ from overlay import Overlay, LANE_NAMES
 
 SIM_HZ = 1000
 EMIT_HZ = 60
-ARM_HZ = 5.0                # below this a lane is just resting chatter, not a note
-FALL_STEPS = 15             # ms of falling rate that count as "the burst crested".
+ARM_HZ = 3.0                # below this a lane is just resting chatter, not a note.
+                            # Measured, not guessed: resting output tops out at
+                            # 1.7 Hz over 20 s of silence, a note peaks at 6.4 Hz.
+                            # 5.0 belonged to the saturated brain (notes peaked
+                            # at 10.6 Hz there) and with the gain fixed it sat
+                            # ABOVE the note — she stopped pressing entirely.
+FALL_S = 0.015              # SECONDS of falling rate that count as "the burst crested".
                             # NOTE: strictly falling, so a HOLD note only fires when
                             # the bar ends. Fixing that needs the plateau case — see
                             # NEXT_SESSION.md before building sustain support.
@@ -43,10 +48,47 @@ RATE_TAU = 0.20             # seconds, EMA window. Heavier smoothing than it loo
                             # the crest rule reads the SHAPE of this curve, so a
                             # smooth curve crests cleanly. At 0.08 the jitter tripped
                             # the falling-counter early and leaked 7 ghost taps.
-DRIVE_SCALE = CALIBRATED_INTENSITY * 1.6   # what a note at full strength reads;
-                                           # capture and the demo chart both cap here
+DRIVE_SCALE = CALIBRATED_INTENSITY * 0.75  # what a note at full strength reads;
+                                           # capture and the demo chart both cap here.
+                            # Was 1.6x (0.192), and `vitals.py` showed what that did:
+                            # all 314 LPLC2/LC4 pinned at ~178 Hz, spread of 10 Hz
+                            # between them. A whole visual layer at the refractory
+                            # ceiling carries no information and leaves no headroom.
+                            # 0.75x peaks them near 76 Hz during an actual note
+                            # (measured through tick(), not a constant-drive
+                            # sweep) — inside the range a real LPLC2 reaches
+                            # under looming, and still 3.8x above resting noise
+                            # at the descending layer. 0.5x was calmer but left
+                            # only 2.4x, which is not enough gate to stand on.
+NOTE_PIXELS = 22.0          # mean pixel change a note at full strength makes in a crop
+CONTRAST_FLOOR = 8.0        # below this it is stage flicker, not a note — hard zero.
+                            # The descending output is LINEAR in drive (measured:
+                            # 0.9 Hz resting to 25 Hz under a full note, a straight
+                            # line), and a linear system has no noise margin of its
+                            # own: 1.3% of pixel change was enough to arm a lane, so
+                            # a blinking ad read as a note in all four at once. The
+                            # threshold has to live here, at the eye. Biologically
+                            # this is contrast adaptation — a fly does not escape
+                            # from "something changed a bit", it escapes from
+                            # expansion.
 YDOTOOL_ENV = {**os.environ, "YDOTOOL_SOCKET": os.environ.get("YDOTOOL_SOCKET", "/tmp/.ydotool_socket")}
 ZERO_LANES = {n: 0.0 for n in LANE_NAMES}
+
+
+def pixels_to_drive(diff):
+    """Mean pixel change in a lane crop -> looming drive, with the noise floor cut.
+
+    A GATE, not a subtraction. Subtracting the floor and rescaling was the
+    obvious version and it was wrong: it eats the amplitude of a dim note (a
+    0.7x note is 15px, so an 8px floor deleted half of it) and the fly went
+    back to missing every weak note — exactly the amplitude-dependence the
+    crest rule was built to kill. Gating keeps a note that clears the floor at
+    its true strength and drops stage flicker to a hard zero.
+    """
+    if diff < CONTRAST_FLOOR:
+        return 0.0
+    return float(np.clip(diff / NOTE_PIXELS, 0.0, 1.0) * DRIVE_SCALE)
+
 
 
 # --------------------------------------------------------------------------
@@ -143,6 +185,7 @@ class CaptureWorker(QThread):
         row_weight = {}
         lanes = dict(LANES)
         calibrated_at = 0.0
+        located = False
         quiet_since = time.time()
         last_frame = None
 
@@ -160,20 +203,32 @@ class CaptureWorker(QThread):
             # Re-find the strumline at startup, and again whenever every lane
             # has been silent for a while — that usually means the window moved
             # rather than that the fly is between notes.
+            #
+            # Keep retrying until it works, instead of accepting the fallback
+            # for the whole run. The first frame is the worst possible moment
+            # to look: KBHGames plays a minute of video ads before the game
+            # loads, so calibration failed on an ad, fell back to coordinates
+            # measured in kiosk mode (which start.sh stopped using), and then
+            # never tried again — the 10 s retry needs every lane to go quiet,
+            # and a blinking ad keeps drive above the quiet threshold forever.
+            # She read the wrong pixels for the entire run. Prime suspect for
+            # the 8% hit rate in the real game.
             now = time.time()
-            if now - calibrated_at > 2.0 and (calibrated_at == 0.0 or now - quiet_since > 10.0):
+            if now - calibrated_at > 2.0 and (not located or now - quiet_since > 10.0):
                 found, info = autocalibrate(Image.fromarray(frame))
                 calibrated_at = now
-                quiet_since = now
                 if found:
                     lanes = found
+                    located = True
+                    quiet_since = now
                     baseline.clear()
                     row_weight.clear()
                     self.shared["lanes_info"] = info
                     print(f"lanes located: {info}")
                 else:
-                    self.shared["lanes_info"] = f"using saved lanes ({info})"
-                    print(f"auto-calibration failed ({info}); using saved lanes from lanes.py")
+                    self.shared["lanes_info"] = f"looking for the strumline ({info})"
+                    if not located:
+                        print(f"auto-calibration: {info} — retrying (saved lanes meanwhile)")
 
             h, w = frame.shape[:2]
             for name, (x0, y0, x1, y1) in lanes.items():
@@ -201,14 +256,13 @@ class CaptureWorker(QThread):
                     row_weight[name] = np.linspace(0.0, 1.0, len(delta), dtype=np.float32) ** 2
                 weight = row_weight[name]
                 diff = float((delta * weight).sum() / weight.sum())
-                self.shared["drive"][name] = float(np.clip(diff / 22.0, 0.0, 1.0) * DRIVE_SCALE)
+                self.shared["drive"][name] = pixels_to_drive(diff)
 
                 # Judging asks a different question than the brain does: not
                 # "is a note coming" but "is one over the arrow right now", so
                 # it reads only the band the arrow occupies.
                 band = max(1, min(len(delta), x1 - x0))
-                self.shared["hit"][name] = float(
-                    np.clip(delta[-band:].mean() / 22.0, 0.0, 1.0) * DRIVE_SCALE)
+                self.shared["hit"][name] = pixels_to_drive(delta[-band:].mean())
             if max(self.shared["drive"].values()) > 0.01:
                 quiet_since = time.time()
             self.shared["status"] = "live"
@@ -216,30 +270,36 @@ class CaptureWorker(QThread):
             time.sleep(0.004)   # the portal delivers faster than we need to look
 
 
-def demo_signals(t):
-    """Synthetic chart: a note every ~0.9 s, one lane at a time.
+def demo_pixels(t):
+    """Synthetic chart, in PIXELS: a note every ~0.9 s, one lane at a time.
 
-    Modelled the way capture now reads a real one — looming drive growing
-    with the square of how near the note is, plus a short pulse marking the
-    moment it is actually over the arrow and meant to be hit.
+    Modelled the way capture reads a real one — apparent size growing with the
+    square of how near the note is, plus a short pulse marking the moment it is
+    actually over the arrow and meant to be hit.
 
-    Module-level on purpose: the calibration harness (`tune.py`) drives the
-    same chart through the same tick(), so a value tuned there means the same
-    thing here. simulate_song.py once grew its own private press rule and the
-    offline numbers stopped describing the live fly.
+    It returns pixel change, not drive, and every caller converts it with
+    `pixels_to_drive()` — the same funnel the camera goes through. It used to
+    hand out drive directly, which quietly exempted the whole bench from the
+    contrast floor: the bench would have kept reporting a fly that panics at
+    stage flicker long after the live one stopped. simulate_song.py once grew
+    its own private press rule and the offline numbers stopped describing the
+    live fly; same mistake, different unit.
+
+    Module-level on purpose: `tune.py` and `train.py` drive the same chart
+    through the same tick(), so a value tuned there means the same thing here.
     """
     period, arrive = 0.9, 0.94
     idx = int(t / period)
     phase = (t % period) / period
     lane = LANE_NAMES[(idx * 7 + idx // 4) % 4]
-    drive = {n: 0.0 for n in LANE_NAMES}
-    hit = {n: 0.0 for n in LANE_NAMES}
+    px = {n: 0.0 for n in LANE_NAMES}
+    hit_px = {n: 0.0 for n in LANE_NAMES}
     if 0.45 < phase <= arrive:
         nearness = (phase - 0.45) / (arrive - 0.45)
-        drive[lane] = DRIVE_SCALE * nearness ** 2
+        px[lane] = NOTE_PIXELS * nearness ** 2
     if abs(phase - arrive) < 0.06:
-        hit[lane] = DRIVE_SCALE * (1.0 - abs(phase - arrive) / 0.06)
-    return drive, hit
+        hit_px[lane] = NOTE_PIXELS * (1.0 - abs(phase - arrive) / 0.06)
+    return px, hit_px
 
 
 class SimWorker(QThread):
@@ -258,7 +318,7 @@ class SimWorker(QThread):
         self.gf_hz = 0.0
         self.last_press = {n: -1e9 for n in LANE_NAMES}   # no cooldown on the first note
         self.prev_rate = {n: 0.0 for n in LANE_NAMES}
-        self.falling = {n: 0 for n in LANE_NAMES}
+        self.falling = {n: 0.0 for n in LANE_NAMES}
         self.crest_ready = {n: True for n in LANE_NAMES}
         self.trough = {n: 0.0 for n in LANE_NAMES}
         self.pressed = None
@@ -274,7 +334,8 @@ class SimWorker(QThread):
         # made idle_s wildly negative there — the penalty silently switched
         # itself off in the bench, so the bench stopped describing the fly.
         self.idle_since = None
-        self.alpha = (1.0 / SIM_HZ) / RATE_TAU
+        self.alpha = (1.0 / SIM_HZ) / RATE_TAU   # só o chute inicial; o tick mede o dt real
+        self.last_now = None
 
     def brain_meta(self):
         b = self.brains[LANE_NAMES[0]]
@@ -300,19 +361,33 @@ class SimWorker(QThread):
         it in simulated time and have its numbers mean something about the fly
         that actually plays.
         """
-        alpha = self.alpha
+        # Every constant below used to be counted in STEPS, calibrated assuming
+        # the sim holds 1 kHz. It does not: the panel measured 361-670 Hz with
+        # the game, capture and overlay all running, so the smoothing window
+        # and the crest window silently stretched by up to 1.7x and she pressed
+        # late — or, after the gain fix, did not press at all (a dim note peaked
+        # at 2.83 Hz against a 3.0 gate at 600 Hz, and the bench lost 15 of 20
+        # notes). Measuring the real gap makes her the same fly at any rate the
+        # machine can manage. The rate itself is per REAL second too (/dt, not
+        # *SIM_HZ): at 600 Hz each step covers 1.67 ms, so multiplying by a
+        # hardcoded 1000 inflated every reading by 1.67x and the arming gate
+        # started tripping on resting noise — 26 ghost taps on a clean chart.
+        dt = (1.0 / SIM_HZ if self.last_now is None
+              else min(0.05, max(0.0002, now - self.last_now)))
+        self.last_now = now
+        alpha = min(1.0, dt / RATE_TAU)
         spikes_union = None
         for name in LANE_NAMES:
             b = self.brains[name]
             b.stimulate_input(drive.get(name, 0.0))
-            s = b.step()
-            inst = s[b.output_idx].mean() * SIM_HZ
+            s = b.step(dt)
+            inst = s[b.output_idx].mean() / dt   # spikes per neuron per REAL second
             self.rate_hz[name] += alpha * (inst - self.rate_hz[name])
             if name == self.pressed or spikes_union is None:
                 spikes_union = s
         # giant fiber across all four copies — whichever lane is closest to
         # bolting is the honest reading, not lane 0's private opinion
-        gf_inst = max(b.rate(b.escape_idx) for b in self.brains.values()) * SIM_HZ
+        gf_inst = max(b.rate(b.escape_idx) for b in self.brains.values()) / dt
         self.gf_hz += alpha * (gf_inst - self.gf_hz)
 
         # Fire on the crest, not on a level. A fixed threshold ties *when* she
@@ -322,7 +397,7 @@ class SimWorker(QThread):
         # it never (a 15% weaker signal missed all 26 notes). The moment the
         # firing rate stops climbing is the circuit's own answer to "it is here
         # now", and that moment does not move when the signal gets louder.
-        # ponytail: FALL_STEPS is a fixed 15 ms of "yes it is really falling";
+        # ponytail: FALL_S is a fixed 15 ms of "yes it is really falling";
         # a two-EMA slope would ride out noise better if a busy stage ever
         # makes the rate jitter enough to trip it early.
         best, best_rate = None, 0.0
@@ -331,11 +406,12 @@ class SimWorker(QThread):
 
             if r < ARM_HZ:          # lane resting: forget everything about the last note
                 self.prev_rate[name] = r
-                self.falling[name] = 0
+                self.falling[name] = 0.0
                 self.crest_ready[name] = True
                 continue
 
-            self.falling[name] = self.falling[name] + 1 if r < self.prev_rate[name] else 0
+            self.falling[name] = (self.falling[name] + dt
+                                  if r < self.prev_rate[name] else 0.0)
             self.prev_rate[name] = r
 
             if not self.crest_ready[name]:
@@ -350,7 +426,7 @@ class SimWorker(QThread):
                     self.crest_ready[name] = True
                 continue
 
-            if self.falling[name] >= FALL_STEPS and r > best_rate:
+            if self.falling[name] >= FALL_S and r > best_rate:
                 best, best_rate = name, r
 
         self.gf_fired = False
@@ -385,10 +461,18 @@ class SimWorker(QThread):
 
         # Dopamine and pain, from how close each press landed to the note
         # the brain was reacting to — the other thing that moves mood.
+        #
+        # Only the lane that earned it. It used to go to all four, and that was
+        # the panic: a Sick is +0.55 of mood, mood lowers the descending
+        # threshold, and at mood +0.55 a lane with NO note on it rests at
+        # ~4 Hz — above the arming gate. So one good hit made the other three
+        # lanes read their own resting noise as a note and tap it. Measured
+        # resting output by mood: +0.0 -> 0.8 Hz, +0.4 -> 2.7, +0.6 -> 4.3,
+        # +1.0 -> 7.8. The ghost taps in the bench landed in lanes the chart
+        # never sent a note to, which is what gave this away.
         events = self.judge.update(now, hit)
         for event in events:
-            for b in self.brains.values():
-                b.apply_judgment(event.reward)
+            self.brains[event.lane].apply_judgment(event.reward)
         return spikes_union, events
 
     def snapshot(self, sim_rate, hit):
@@ -432,8 +516,12 @@ class SimWorker(QThread):
                 next_step = now + dt
 
             if self.demo:
-                drive, hit = (demo_signals(now - t_start) if self.stim_on
-                              else (ZERO_LANES, ZERO_LANES))
+                if self.stim_on:
+                    px, hit_px = demo_pixels(now - t_start)
+                    drive = {n: pixels_to_drive(v) for n, v in px.items()}
+                    hit = {n: pixels_to_drive(v) for n, v in hit_px.items()}
+                else:
+                    drive, hit = ZERO_LANES, ZERO_LANES
             else:
                 drive, hit = self.shared["drive"], self.shared["hit"]
 

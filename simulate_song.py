@@ -22,7 +22,7 @@ import random
 
 import numpy as np
 
-from fly_brain import FlyBrain, CALIBRATED_INTENSITY, MOOD_DECAY
+from fly_brain import FlyBrain, CALIBRATED_INTENSITY, MOOD_TAU
 from judge import Judge
 
 LANE_NAMES = ["left", "down", "up", "right"]
@@ -32,10 +32,10 @@ APPROACH_STEPS = 12  # how many steps a note "looms" before it must be hit
 DRIVE_SCALE = CALIBRATED_INTENSITY * 1.6
 PRESS_COOLDOWN_S = 0.18
 
-# MOOD_DECAY is a per-step constant calibrated for the 1 kHz brain loop. This
-# file steps at 30 Hz, so applying it raw made a mood here last thirty times
-# longer than the same mood in the live fly — the hormone outlived the song.
-MOOD_DECAY_PER_STEP = MOOD_DECAY ** (1000.0 / STEPS_PER_SECOND)
+# Mood decays over SECONDS now (MOOD_TAU), not per step, so this file just
+# asks for its own step length instead of rescaling a per-step constant — the
+# bug that used to make a mood here outlive the song by thirty times.
+MOOD_DECAY_PER_STEP = float(np.exp(-(1.0 / STEPS_PER_SECOND) / MOOD_TAU))
 
 
 def make_chart(rng, n_steps):
