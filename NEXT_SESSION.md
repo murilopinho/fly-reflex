@@ -378,3 +378,44 @@ nível 4. Não paga. Fica registrado pra ninguém tentar de novo.
    frame. **Suspeito nº 1 dos 8%, e só rodando o jogo se confirma.**
 4. **Ela continua sem aprender.** Pesos fixos, humor decai a zero. Nada mudou
    nisso e nada foi aprovado.
+
+---
+
+## Sessão 7 (28/09): portão adaptativo contra o "palco vivo"
+
+**O que mudou:** `run.py`. O portão de armar deixou de ser só `ARM_HZ` e virou
+`max(ARM_HZ, ADAPT_K × fundo da pista)`, onde o fundo é uma média lenta da
+taxa da própria pista (`ADAPT_TAU`). É adaptação: pista que está piscando há
+segundos precisa de mais pra dizer "chegou nota".
+
+**Por que:** medido no aperto, no nível 5 uma nota de verdade fica a 2,1x o
+fundo da pista (mediana) e a piscada a 1,2x. Em palco quieto o fundo fica em
+~1 Hz, então `1,6 × 1 < 3` e o portão antigo continua valendo como antes.
+
+**Varredura** (Sick/Miss/Ghost do nível 5, a 1000 Hz / a 600 Hz; os níveis
+1 a 4 ficaram limpos em todas as linhas marcadas com ✓):
+
+| k | τ | nível 5 @1000 | nível 5 @600 |
+|---|---|---|---|
+| 0 (antes) | – | 16S 0m 149g | 14S 0m 167g |
+| 1,6 | 2,0 | 15S 0m 39g ✓ | 15S 0m 35g |
+| 1,6 | 4,0 | 18S 0m 69g | 16S 0m 73g |
+| **1,6** | **1,0 ← escolhido** | **17S 1m 17g** ✓ | **17S 0m 23g** |
+| 1,6 | 0,7 | 14S 2m 12g (e 2 Miss no nível 4) | 14S 2m 17g |
+| 1,6 | 1,4 | 17S 0m 25g | 14S 0m 27g |
+| 1,8 | 1,0 | 16S 3m 11g | 13S 3m 16g |
+| 2,0 | 2,0 | 15S 4m 19g | 11S 5m 27g |
+
+Acima de 1,6 os Miss começam a aparecer, e isso é pior que ghost no jogo
+(Miss zera combo). O nível 5 ainda não PASSA pelo critério do `train.py`
+(≤1 ghost), mas saiu de 7 ghosts por nota pra ~1.
+
+**Não feito:**
+- τ 0,5 e 0,7 perdem nota (Miss) e τ 1,4 deixa mais ghost: 1,0 é o ponto certo.
+- Sem commit: diff só em `run.py` + esta seção.
+
+**Jogo real ainda sem teste.** O KBHGames trava num desafio do Cloudflare
+num navegador headless. A versão do itch.io
+(`html-classic.itch.zone/html/16944508-1877713/`) empaca em 13% do
+carregamento no headless. Frame real continua sendo o que falta pro
+discriminador espacial (item 2 da sessão 6).

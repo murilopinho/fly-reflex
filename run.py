@@ -34,6 +34,8 @@ ARM_HZ = 3.0                # below this a lane is just resting chatter, not a n
                             # 5.0 belonged to the saturated brain (notes peaked
                             # at 10.6 Hz there) and with the gain fixed it sat
                             # ABOVE the note — she stopped pressing entirely.
+ADAPT_K = 1.6               # a lane only arms above this many times its own recent
+ADAPT_TAU = 1.0             # background (slow EMA, seconds). See tick() for why.
 FALL_S = 0.015              # SECONDS of falling rate that count as "the burst crested".
                             # NOTE: strictly falling, so a HOLD note only fires when
                             # the bar ends. Fixing that needs the plateau case — see
@@ -321,6 +323,7 @@ class SimWorker(QThread):
         self.falling = {n: 0.0 for n in LANE_NAMES}
         self.crest_ready = {n: True for n in LANE_NAMES}
         self.trough = {n: 0.0 for n in LANE_NAMES}
+        self.background = {n: 0.0 for n in LANE_NAMES}
         self.pressed = None
         self._procs = []
         self.judge = Judge(LANE_NAMES, scale=DRIVE_SCALE)
@@ -400,11 +403,25 @@ class SimWorker(QThread):
         # ponytail: FALL_S is a fixed 15 ms of "yes it is really falling";
         # a two-EMA slope would ride out noise better if a busy stage ever
         # makes the rate jitter enough to trip it early.
+        #
+        # The gate adapts to each lane's own background. A fixed ARM_HZ holds
+        # on a quiet stage, but a flickering one (level 5 of train.py, the
+        # blinking ad in the real game) lifts a lane's resting rate to ~3.4 Hz
+        # and its random crests clear 3 Hz constantly: 147 ghost taps on 20
+        # notes. Amplitude can't split them (flicker and a dim note overlap)
+        # and neither can dwell time (both measured, see NEXT_SESSION.md). What
+        # does: measured at the press, a real note sits at 2.1x the lane's own
+        # slow average, flicker at 1.2x. Biologically this is adaptation — a
+        # neuron that has been firing for seconds needs more to say "new".
+        # On a quiet stage the background is ~1 Hz, so ADAPT_K * 1 < ARM_HZ and
+        # nothing changes there.
+        slow = min(1.0, dt / ADAPT_TAU)
         best, best_rate = None, 0.0
         for name in LANE_NAMES:
             r = self.rate_hz[name]
+            self.background[name] += slow * (r - self.background[name])
 
-            if r < ARM_HZ:          # lane resting: forget everything about the last note
+            if r < max(ARM_HZ, ADAPT_K * self.background[name]):   # resting: forget the last note
                 self.prev_rate[name] = r
                 self.falling[name] = 0.0
                 self.crest_ready[name] = True
