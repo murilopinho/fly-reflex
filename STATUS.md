@@ -43,8 +43,6 @@ A janela é arrastável; `Esc` fecha.
 | `train.py` | campo de treino: escada de 5 níveis, `--rate` simula a máquina engasgando |
 | `simulate_song.py` | gera `song_recording.json` para a visualização web em `artifact/` |
 
-Visualização web publicada (replay offline, compartilhável):
-https://claude.ai/artifact/7Z41L9DWEzT3soaXXrSYdx
 
 ## Decisões importantes (não refazer do zero)
 
